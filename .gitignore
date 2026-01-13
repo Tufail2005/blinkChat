@@ -7,3 +7,5 @@ build/
 
 # Environment Variables (Security)
 .env
+/src/generated/prisma
+
