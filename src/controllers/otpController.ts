@@ -104,8 +104,16 @@ export const verifyOtp = async (req: Request, res: Response) => {
     { expiresIn: "15m" } // User has 15 mins to complete registration form
   );
 
+  //  SET COOKIE
+  res.cookie("verify_token", verificationToken, {
+    httpOnly: true,
+    secure: false, // true in production
+    sameSite: "lax", // REQUIRED for localhost cross-port
+    maxAge: 15 * 60 * 1000,
+    path: "/",
+  });
+
   return res.status(200).json({
     message: "Email verified",
-    verificationToken, // Frontend must send this to /register
   });
 };

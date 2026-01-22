@@ -19,19 +19,28 @@ export const register = async (req: Request, res: Response) => {
     });
   }
 
-  const { userName, password, verificationToken } = result.data;
+  const { userName, password } = result.data;
 
   try {
+    // READ VERIFICATION TOKEN FROM COOKIE
+    const verificationToken = req.cookies.verify_token;
+
+    if (!verificationToken) {
+      return res.status(401).json({ message: "Email not verified" });
+    }
+
     let decodedEmail: string;
 
     try {
       const decoded = jwt.verify(
-        verificationToken as string,
+        verificationToken,
         process.env.JWT_SECRET!
       ) as any;
+
       if (!decoded.isVerified || !decoded.email) {
-        throw new Error("Invalid Token payload");
+        throw new Error("Invalid token payload");
       }
+
       decodedEmail = decoded.email;
     } catch (err) {
       return res
@@ -59,19 +68,24 @@ export const register = async (req: Request, res: Response) => {
       },
     });
 
+    // ✅ CREATE AUTH TOKEN
     const token = jwt.sign(
       { userId: user.id, userName: user.userName },
       process.env.JWT_SECRET!,
       { expiresIn: "7d" }
     );
 
+    // ✅ SET AUTH COOKIE
     res.cookie("auth_token", token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
       sameSite: process.env.NODE_ENV === "production" ? "strict" : "lax",
-      maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+      maxAge: 7 * 24 * 60 * 60 * 1000,
       path: "/",
     });
+
+    // ✅ DELETE VERIFICATION COOKIE (ONE-TIME USE)
+    res.clearCookie("verify_token");
 
     return res.status(201).json({ message: "User created", userId: user.id });
   } catch (err: any) {
