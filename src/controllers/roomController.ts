@@ -3,6 +3,7 @@ import prisma from "../utils/prisma.js";
 import { createRoomSchema } from "../types/types.js";
 import { validateLocation } from "./geoController.js";
 import { getDistance } from "geolib";
+import { redis } from "../utils/redis.js";
 
 export const createRoom = async (req: Request, res: Response) => {
   const parsedRoom = createRoomSchema.safeParse(req.body);
@@ -214,9 +215,66 @@ export const allJoinedRooms = async (req: Request, res: Response) => {
       },
     });
 
-    res.status(200).json(rooms);
+    if (rooms.length === 0) {
+      return res.status(200).json([]);
+    }
+
+    // Redis Pipeline to fetch the last message for EVERY room at once
+    const pipeline = redis.pipeline();
+
+    rooms.forEach((room) => {
+      const roomKey = `chat:room:${room.id}`;
+      // ZREVRANGE 0 0 gets the element with the highest score (the latest message)
+      pipeline.zrevrange(roomKey, 0, 0);
+    });
+
+    // Execute all Redis commands in parallel
+    const redisResults = await pipeline.exec();
+
+    // Merge Redis data with Prisma Room data
+    const formattedRooms = rooms.map((room, index) => {
+      // redisResults structure: [[error, result], [error, result], ...]
+      const [error, result] = redisResults![index] ?? [null, null];
+
+      let lastMessage = null;
+      let lastMessageTime = null;
+
+      // If we got a result and it's not empty array
+      if (!error && Array.isArray(result) && result.length > 0) {
+        try {
+          // Redis stores the payload as a JSON string
+          const payload = JSON.parse(result[0]);
+          lastMessage = payload.text;
+          lastMessageTime = payload.createdAt;
+        } catch (e) {
+          console.error(`Error parsing cache for room ${room.id}`, e);
+        }
+      }
+
+      return {
+        id: room.id,
+        name: room.name,
+        photo: room.photo,
+        lastMessage,
+        lastMessageTime,
+      };
+    });
+
+    // Sort rooms by latest activity (Newest first)
+    // If no message exists, we treat time as 0 so it drops to the bottom
+    formattedRooms.sort((a, b) => {
+      const timeA = a.lastMessageTime
+        ? new Date(a.lastMessageTime).getTime()
+        : 0;
+      const timeB = b.lastMessageTime
+        ? new Date(b.lastMessageTime).getTime()
+        : 0;
+      return timeB - timeA;
+    });
+
+    res.status(200).json(formattedRooms);
   } catch (error) {
-    console.error("Error fetching rooms:", error);
+    console.error("Error fetching joined rooms:", error);
     res.status(500).json({ error: "Unable to fetch joined rooms" });
   }
 };
